@@ -106,17 +106,20 @@ func GenerateListToolsResult(pMgr *primitives.PrimitiveManager, g group.Group, u
 		if !ok {
 			return ListToolsResult{}, fmt.Errorf("tool does not exist: %s", toolName)
 		}
-		srcName := tool.GetSourceName()
 		var src sources.Source
-		if srcName != "" {
-			src, ok = pMgr.GetSource(srcName)
-			if !ok {
-				return ListToolsResult{}, fmt.Errorf("unable to retrieve %s source for tool %q", srcName, tool.GetName())
-			}
+		if srcName := tool.GetSourceName(); srcName != "" {
+			// A source that is configured but not yet connected is absent from
+			// the map, so listing falls back to the static parameters rather
+			// than failing. Unknown source names are rejected at startup.
+			src, _ = pMgr.GetSource(srcName)
 		}
-		params, err := tool.GetParameters(src)
-		if err != nil {
-			return ListToolsResult{}, fmt.Errorf("error getting parameters for tool %q: %w", toolName, err)
+		params := tool.GetStaticParameters()
+		if src != nil {
+			resolved, err := tool.GetParameters(src)
+			if err != nil {
+				return ListToolsResult{}, fmt.Errorf("error getting parameters for tool %q: %w", toolName, err)
+			}
+			params = resolved
 		}
 		toolManifest := generateToolManifest(toolName, tool.GetDescription(), tool.GetAuthRequired(), params, tool.GetAnnotations(), urlParams)
 		mcpManifest = append(mcpManifest, toolManifest)

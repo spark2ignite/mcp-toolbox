@@ -117,17 +117,20 @@ func (g Group) ToolsetManifest(serverVersion string, mgr GroupManager) (tools.To
 		if !ok {
 			return tools.ToolsetManifest{}, fmt.Errorf("tool does not exist: %s", name)
 		}
-		srcName := tool.GetSourceName()
 		var src sources.Source
-		if srcName != "" {
-			src, ok = mgr.GetSource(srcName)
-			if !ok {
-				return tools.ToolsetManifest{}, fmt.Errorf("unable to retrieve %s source for tool %q", srcName, name)
-			}
+		if srcName := tool.GetSourceName(); srcName != "" {
+			// A source that is configured but not yet connected is absent from
+			// the map, so listing falls back to the static manifest rather than
+			// failing. Tools naming an unknown source are rejected at startup.
+			src, _ = mgr.GetSource(srcName)
 		}
-		m, err := tool.Manifest(src)
-		if err != nil {
-			return tools.ToolsetManifest{}, fmt.Errorf("error generating manifest for tool %q: %w", name, err)
+		m := tool.StaticManifest()
+		if src != nil {
+			resolved, err := tool.Manifest(src)
+			if err != nil {
+				return tools.ToolsetManifest{}, fmt.Errorf("error generating manifest for tool %q: %w", name, err)
+			}
+			m = resolved
 		}
 		toolsManifest[name] = m
 	}

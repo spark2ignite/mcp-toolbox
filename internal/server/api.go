@@ -108,23 +108,23 @@ func toolGetHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		_ = render.Render(w, r, newErrResponse(err, http.StatusNotFound))
 		return
 	}
-	srcName := tool.GetSourceName()
 	var src sources.Source
-	if srcName != "" {
-		src, ok = s.PrimitiveMgr.GetSource(srcName)
-		if !ok {
-			err = fmt.Errorf("unable to retrieve source for tool %s", toolName)
+	if srcName := tool.GetSourceName(); srcName != "" {
+		// A source that is configured but not yet connected is absent from the
+		// map, so the manifest falls back to the static one rather than
+		// failing. Unknown source names are rejected at startup.
+		src, _ = s.PrimitiveMgr.GetSource(srcName)
+	}
+	toolManifest := tool.StaticManifest()
+	if src != nil {
+		resolved, mErr := tool.Manifest(src)
+		if mErr != nil {
+			err = fmt.Errorf("error generating manifest for tool %q: %w", toolName, mErr)
 			s.logger.DebugContext(ctx, err.Error())
-			_ = render.Render(w, r, newErrResponse(err, http.StatusNotFound))
+			_ = render.Render(w, r, newErrResponse(err, http.StatusInternalServerError))
 			return
 		}
-	}
-	toolManifest, err := tool.Manifest(src)
-	if err != nil {
-		err = fmt.Errorf("error generating manifest for tool %q: %w", toolName, err)
-		s.logger.DebugContext(ctx, err.Error())
-		_ = render.Render(w, r, newErrResponse(err, http.StatusInternalServerError))
-		return
+		toolManifest = resolved
 	}
 	// TODO: this can be optimized later with some caching
 	m := tools.ToolsetManifest{

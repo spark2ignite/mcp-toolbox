@@ -132,6 +132,7 @@ type Tool interface {
 	EmbedParams(context.Context, parameters.ParamValues, PrimitiveManagerI) (parameters.ParamValues, error)
 	Manifest(sources.Source) (Manifest, error)
 	StaticManifest() Manifest
+	GetStaticParameters() parameters.Parameters
 	Authorized([]string) bool
 	RequiresClientAuthorization(sources.Source) (bool, error)
 	ToConfig() ToolConfig
@@ -237,6 +238,13 @@ func (b BaseTool[T]) Manifest(_ sources.Source) (Manifest, error) {
 // skeleton — used for offline generation (e.g. skills) where no source exists.
 func (b BaseTool[T]) StaticManifest() Manifest {
 	return b.metadata
+}
+
+// GetStaticParameters is the GetParameters counterpart to StaticManifest: it
+// always reaches the parameters baked at Initialize, never a dynamic tool's
+// source-resolved override.
+func (b BaseTool[T]) GetStaticParameters() parameters.Parameters {
+	return b.StaticParameters
 }
 
 func (b BaseTool[T]) GetParameters(_ sources.Source) (parameters.Parameters, error) {

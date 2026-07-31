@@ -402,3 +402,30 @@ func TestGenerateListPromptsResult(t *testing.T) {
 		t.Fatalf("unexpected list tools result (-want +got):\n%s", diff)
 	}
 }
+
+func TestGenerateListToolsResultUnconnectedSource(t *testing.T) {
+	// The manager holds no sources; listing must still succeed, falling back to
+	// the parameters baked at tool initialization.
+	tool := testutils.NewMockTool(
+		"some_params",
+		"", "my-source",
+		parameters.Parameters{
+			parameters.NewIntParameter("param1", "This is the first parameter."),
+		}, false, false)
+	toolsMap := map[string]tools.Tool{tool.GetName(): tool}
+	g := group.NewGroup(group.GroupConfig{
+		Name:      "test-toolset",
+		ToolNames: []string{"some_params"},
+	})
+	pMgr := primitives.NewPrimitiveManager(nil, nil, nil, toolsMap, nil, nil)
+	got, err := GenerateListToolsResult(pMgr, g, nil)
+	if err != nil {
+		t.Fatalf("unable to generate list tools result: %s", err)
+	}
+	if len(got.Tools) != 1 || got.Tools[0].Name != "some_params" {
+		t.Fatalf("unexpected list tools result: %+v", got.Tools)
+	}
+	if _, ok := got.Tools[0].ToolInputSchema.Properties["param1"]; !ok {
+		t.Fatalf("expected static parameter param1 in schema, got %+v", got.Tools[0].ToolInputSchema.Properties)
+	}
+}
