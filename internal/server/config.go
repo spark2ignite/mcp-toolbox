@@ -103,6 +103,8 @@ type ServerConfig struct {
 	EnableDraftSpecs bool
 	// SkipSourceValidation skips source validation during server startup
 	SkipSourceValidation bool
+	// LazySourceInit connects each source on first use instead of at startup.
+	LazySourceInit bool
 }
 
 type logFormat string

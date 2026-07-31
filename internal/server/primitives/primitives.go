@@ -16,6 +16,8 @@ package primitives
 
 import (
 	"cmp"
+	"context"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -25,6 +27,10 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/prompts"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 )
 
 // PrimitiveManager contains available resources for the server. Should be initialized with NewPrimitiveManager().
@@ -38,6 +44,13 @@ type PrimitiveManager struct {
 	tools           map[string]tools.Tool
 	prompts         map[string]prompts.Prompt
 	groups          map[string]group.Group
+
+	// Lazy source initialization. When enabled, sources are absent from the
+	// sources map until ResolveSource connects one on first use.
+	lazy          bool
+	sourceConfigs map[string]sources.SourceConfig
+	tracer        trace.Tracer
+	initGroup     singleflight.Group
 }
 
 func NewPrimitiveManager(
@@ -62,11 +75,88 @@ func NewPrimitiveManager(
 	return primitiveMgr
 }
 
+// GetSource returns a source only if it is already connected. It never blocks,
+// so listing paths can use it and fall back to a tool's static manifest when a
+// lazily-initialized source has not been reached yet. Invocation paths want
+// ResolveSource instead.
 func (r *PrimitiveManager) GetSource(sourceName string) (sources.Source, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	source, ok := r.sources[sourceName]
 	return source, ok
+}
+
+// SetLazySources enables deferred source initialization: sources stay absent
+// from the sources map until ResolveSource connects them on first use.
+func (r *PrimitiveManager) SetLazySources(sourceConfigs map[string]sources.SourceConfig, tracer trace.Tracer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sources == nil {
+		r.sources = make(map[string]sources.Source, len(sourceConfigs))
+	}
+	r.lazy = true
+	r.sourceConfigs = sourceConfigs
+	r.tracer = tracer
+}
+
+// LazySources reports whether sources are connected on first use.
+func (r *PrimitiveManager) LazySources() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.lazy
+}
+
+// ResolveSource returns the named source, connecting it first if lazy source
+// initialization is enabled and it has not been reached yet. Unlike GetSource
+// it blocks on I/O and can fail, so it belongs on invocation paths.
+func (r *PrimitiveManager) ResolveSource(ctx context.Context, sourceName string) (sources.Source, error) {
+	r.mu.RLock()
+	source, connected := r.sources[sourceName]
+	sourceConfig, configured := r.sourceConfigs[sourceName]
+	tracer := r.tracer
+	r.mu.RUnlock()
+
+	if connected {
+		return source, nil
+	}
+	if !configured {
+		return nil, fmt.Errorf("unable to retrieve source %q", sourceName)
+	}
+
+	// singleflight collapses the connection attempts that race on a cold
+	// source. A failure is deliberately not cached, so a source that was down
+	// or misconfigured starts working on a later call without a restart.
+	resolved, err, _ := r.initGroup.Do(sourceName, func() (any, error) {
+		r.mu.RLock()
+		source, connected := r.sources[sourceName]
+		r.mu.RUnlock()
+		if connected {
+			return source, nil
+		}
+
+		childCtx, span := tracer.Start(
+			ctx,
+			"toolbox/server/source/init",
+			trace.WithAttributes(attribute.String("source_type", sourceConfig.SourceConfigType())),
+			trace.WithAttributes(attribute.String("source_name", sourceName)),
+		)
+		defer span.End()
+
+		source, err := sourceConfig.Initialize(childCtx, tracer)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			return nil, fmt.Errorf("unable to initialize source %q: %w", sourceName, err)
+		}
+
+		r.mu.Lock()
+		r.sources[sourceName] = source
+		r.mu.Unlock()
+		return source, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resolved.(sources.Source), nil
 }
 
 func (r *PrimitiveManager) GetAuthService(authServiceName string) (auth.AuthService, bool) {
@@ -105,6 +195,9 @@ func (r *PrimitiveManager) GetGroup(groupName string) (group.Group, bool) {
 	return g, ok
 }
 
+// SetPrimitives replaces every primitive map. Callers using lazy sources must
+// follow with SetLazySources to install the reloaded source configs, since the
+// previous ones no longer describe the sources map they just swapped in.
 func (r *PrimitiveManager) SetPrimitives(sourcesMap map[string]sources.Source, authServicesMap map[string]auth.AuthService, embeddingModelsMap map[string]embeddingmodels.EmbeddingModel, toolsMap map[string]tools.Tool, promptsMap map[string]prompts.Prompt, groupsMap map[string]group.Group) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

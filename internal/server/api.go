@@ -162,14 +162,14 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srcName := tool.GetSourceName()
 	var src sources.Source
-	if srcName != "" {
-		src, ok = s.PrimitiveMgr.GetSource(srcName)
-		if !ok {
-			err = fmt.Errorf("unable to retrieve source for tool %s", toolName)
+	if srcName := tool.GetSourceName(); srcName != "" {
+		// Connects the source if lazy initialization deferred it.
+		src, err = s.PrimitiveMgr.ResolveSource(ctx, srcName)
+		if err != nil {
+			err = fmt.Errorf("unable to retrieve source for tool %s: %w", toolName, err)
 			s.logger.DebugContext(ctx, err.Error())
-			_ = render.Render(w, r, newErrResponse(err, http.StatusNotFound))
+			_ = render.Render(w, r, newErrResponse(err, http.StatusServiceUnavailable))
 			return
 		}
 	}

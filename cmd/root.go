@@ -139,7 +139,9 @@ func handleDynamicReload(ctx context.Context, toolsFile internal.Config, s *serv
 		panic(err)
 	}
 
-	sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap, err := validateReloadEdits(ctx, toolsFile)
+	lazySources := s.PrimitiveMgr.LazySources()
+
+	sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap, err := validateReloadEdits(ctx, toolsFile, lazySources)
 	if err != nil {
 		errMsg := fmt.Errorf("unable to validate reloaded edits: %w", err)
 		logger.WarnContext(ctx, errMsg.Error())
@@ -147,13 +149,20 @@ func handleDynamicReload(ctx context.Context, toolsFile internal.Config, s *serv
 	}
 
 	s.PrimitiveMgr.SetPrimitives(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap)
+	if lazySources {
+		instrumentation, err := util.InstrumentationFromContext(ctx)
+		if err != nil {
+			panic(err)
+		}
+		s.PrimitiveMgr.SetLazySources(toolsFile.Sources, instrumentation.Tracer)
+	}
 
 	return nil
 }
 
 // validateReloadEdits checks that the reloaded config configs can initialized without failing
 func validateReloadEdits(
-	ctx context.Context, toolsFile internal.Config,
+	ctx context.Context, toolsFile internal.Config, lazySourceInit bool,
 ) (map[string]sources.Source, map[string]auth.AuthService, map[string]embeddingmodels.EmbeddingModel, map[string]tools.Tool, map[string]prompts.Prompt, map[string]group.Group, error,
 ) {
 	logger, err := util.LoggerFromContext(ctx)
@@ -180,6 +189,7 @@ func validateReloadEdits(
 		PromptConfigs:         toolsFile.Prompts,
 		GroupConfigs:          toolsFile.Groups,
 		IgnoreUnknownTools:    util.IgnoreUnknownToolsFromContext(ctx),
+		LazySourceInit:        lazySourceInit,
 	}
 
 	sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap, err := server.InitializeConfigs(ctx, reloadedConfig)

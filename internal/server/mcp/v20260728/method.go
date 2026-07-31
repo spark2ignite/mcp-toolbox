@@ -297,13 +297,31 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, g group.Group, 
 		return jsonrpc.NewError(id, jsonrpc.INVALID_PARAMS, err.Error(), nil), err
 	}
 
-	srcName := tool.GetSourceName()
 	var src sources.Source
-	if srcName != "" {
-		src, ok = primitiveMgr.GetSource(srcName)
-		if !ok {
-			err = fmt.Errorf("unable to retrieve source for tool %s", toolName)
-			return jsonrpc.NewError(id, jsonrpc.INTERNAL_ERROR, err.Error(), nil), err
+	if srcName := tool.GetSourceName(); srcName != "" {
+		// Connects the source if lazy initialization deferred it. A failure is
+		// reported as a tool execution error rather than a protocol error, so
+		// the agent sees why the source is unreachable.
+		src, err = primitiveMgr.ResolveSource(ctx, srcName)
+		if err != nil {
+			text := TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("unable to retrieve source for tool %s: %s", toolName, err),
+			}
+			return jsonrpc.JSONRPCResponse{
+				Jsonrpc: jsonrpc.JSONRPC_VERSION,
+				Id:      id,
+				Result: CallToolResult{
+					Result: Result{
+						ResultType: resultTypeComplete,
+						Result: jsonrpc.Result{
+							Meta: meta,
+						},
+					},
+					Content: []TextContent{text},
+					IsError: true,
+				},
+			}, nil
 		}
 	}
 

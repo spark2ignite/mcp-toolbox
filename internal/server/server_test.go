@@ -1836,6 +1836,53 @@ func TestInitializeConfigs(t *testing.T) {
 			t.Fatalf("tools map mismatch: want %s, got %s", wantToolsMap, toolsMap)
 		}
 	})
+	t.Run("lazy source initialization", func(t *testing.T) {
+		tool1 := testutils.NewMockTool("my-tool", "mock tool", "my-source", nil, false, false)
+		// An incompatible source type would fail ValidateSource eagerly, so
+		// succeeding here proves the source was neither connected nor validated.
+		cfg := server.ServerConfig{
+			Version: "0.0.0",
+			SourceConfigs: server.SourceConfigs{
+				"my-source": testutils.MockSourceConfig{Name: "my-source", Type: "invalid-type"},
+			},
+			ToolConfigs: server.ToolConfigs{
+				"my-tool": tool1.ToConfig(),
+			},
+			LazySourceInit: true,
+		}
+		sourcesMap, _, _, toolsMap, _, _, err := server.InitializeConfigs(ctx, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error during config initialization: %s", err)
+		}
+		if len(sourcesMap) != 0 {
+			t.Fatalf("expected no connected sources, got %v", sourcesMap)
+		}
+		wantToolsMap := map[string]tools.Tool{"my-tool": tool1}
+		if !reflect.DeepEqual(toolsMap, wantToolsMap) {
+			t.Fatalf("tools map mismatch: want %s, got %s", wantToolsMap, toolsMap)
+		}
+	})
+	t.Run("lazy initialization rejects an unknown source name", func(t *testing.T) {
+		// Deferring connections must not defer catching a typo'd source name.
+		cfg := server.ServerConfig{
+			Version: "0.0.0",
+			SourceConfigs: server.SourceConfigs{
+				"my-source": testutils.MockSourceConfig{Name: "my-source", Type: "mock-source"},
+			},
+			ToolConfigs: server.ToolConfigs{
+				"my-tool": testutils.NewMockTool("my-tool", "mock tool", "typo-source", nil, false, false).ToConfig(),
+			},
+			LazySourceInit: true,
+		}
+		_, _, _, _, _, _, err := server.InitializeConfigs(ctx, cfg)
+		if err == nil {
+			t.Fatal("expected an error for a tool naming an unconfigured source")
+		}
+		wantErr := "unable to retrieve source typo-source for tool my-tool"
+		if err.Error() != wantErr {
+			t.Fatalf("unexpected error: want %s, got %s", wantErr, err.Error())
+		}
+	})
 	t.Run("invalid initialization", func(t *testing.T) {
 		invalidCfg := server.ServerConfig{
 			Version: "0.0.0",

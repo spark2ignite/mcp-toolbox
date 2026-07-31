@@ -83,12 +83,12 @@ func runInvoke(cmd *cobra.Command, args []string, opts *internal.ToolboxOptions)
 		return errMsg
 	}
 
-	srcName := tool.GetSourceName()
 	var src sources.Source
-	if srcName != "" {
-		src, ok = primitiveMgr.GetSource(srcName)
-		if !ok {
-			errMsg := fmt.Errorf("unable to retrieve source for tool %s", toolName)
+	if srcName := tool.GetSourceName(); srcName != "" {
+		// Connects the source if lazy initialization deferred it.
+		src, err = primitiveMgr.ResolveSource(ctx, srcName)
+		if err != nil {
+			errMsg := fmt.Errorf("unable to retrieve source for tool %s: %w", toolName, err)
 			opts.Logger.ErrorContext(ctx, errMsg.Error())
 			return errMsg
 		}

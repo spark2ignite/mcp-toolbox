@@ -17,6 +17,7 @@ package v20250326
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -25,8 +26,11 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/log"
 	"github.com/googleapis/mcp-toolbox/internal/server/mcp/jsonrpc"
 	"github.com/googleapis/mcp-toolbox/internal/server/primitives"
+	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/util"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // Dummy JSONRPC ID for testing
@@ -557,5 +561,66 @@ func TestPromptsGetHandler(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// failingSourceConfig always fails to connect, standing in for a database that
+// is down or misconfigured when a lazily-initialized source is first reached.
+type failingSourceConfig struct{}
+
+func (failingSourceConfig) SourceConfigType() string { return "failing" }
+
+func (failingSourceConfig) Initialize(context.Context, trace.Tracer) (sources.Source, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestToolsCallUnreachableLazySource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	testLogger, err := log.NewStdLogger(os.Stdout, os.Stderr, "info")
+	if err != nil {
+		t.Fatalf("unable to initialize logger: %s", err)
+	}
+	ctx = util.WithLogger(ctx, testLogger)
+
+	tool := testutils.NewMockTool("lazy_tool", "tool backed by a lazy source", "lazy-source", nil, false, false)
+	other := testutils.NewMockTool("other_tool", "tool with no source", "", nil, false, false)
+	toolsMap, promptsMap, groups := testutils.SetUpResources(t, []testutils.MockTool{tool, other}, nil)
+	primitiveMgr := primitives.NewPrimitiveManager(nil, nil, nil, toolsMap, promptsMap, groups)
+	primitiveMgr.SetLazySources(
+		map[string]sources.SourceConfig{"lazy-source": failingSourceConfig{}},
+		noop.NewTracerProvider().Tracer("test"),
+	)
+
+	body, err := json.Marshal(CallToolRequest{
+		Request: jsonrpc.Request{Method: "tools/call"},
+		Params: struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments,omitempty"`
+		}{Name: "lazy_tool"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error during marshaling: %s", err)
+	}
+
+	got, err := toolsCallHandler(ctx, dummyID, mustGroup(t, primitiveMgr), primitiveMgr, body, nil)
+	// A connection failure must reach the agent as a tool result, not as a
+	// JSON-RPC protocol error that most harnesses discard.
+	if err != nil {
+		t.Fatalf("expected a tool error result rather than a protocol error, got %s", err)
+	}
+	resp, ok := got.(jsonrpc.JSONRPCResponse)
+	if !ok {
+		t.Fatalf("expected a JSONRPCResponse, got %T", got)
+	}
+	result, ok := resp.Result.(CallToolResult)
+	if !ok {
+		t.Fatalf("expected a CallToolResult, got %T", resp.Result)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be set")
+	}
+	if len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, "connection refused") {
+		t.Fatalf("expected the underlying connection error in the content, got %+v", result.Content)
 	}
 }

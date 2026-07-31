@@ -100,31 +100,39 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 
 	// initialize and validate the sources from configs
 	sourcesMap := make(map[string]sources.Source)
-	for name, sc := range cfg.SourceConfigs {
-		s, err := func() (sources.Source, error) {
-			childCtx, span := instrumentation.Tracer.Start(
-				ctx,
-				"toolbox/server/source/init",
-				trace.WithAttributes(attribute.String("source_type", sc.SourceConfigType())),
-				trace.WithAttributes(attribute.String("source_name", name)),
-			)
-			defer span.End()
-			s, err := sc.Initialize(childCtx, instrumentation.Tracer)
+	if cfg.LazySourceInit {
+		// Sources connect on first use via PrimitiveManager.ResolveSource, so
+		// there is no live source to validate a tool against yet. Tool/source
+		// type compatibility is still checked at invocation time.
+		cfg.SkipSourceValidation = true
+		l.InfoContext(ctx, fmt.Sprintf("Deferred initialization of %d sources: each connects on first use", len(cfg.SourceConfigs)))
+	} else {
+		for name, sc := range cfg.SourceConfigs {
+			s, err := func() (sources.Source, error) {
+				childCtx, span := instrumentation.Tracer.Start(
+					ctx,
+					"toolbox/server/source/init",
+					trace.WithAttributes(attribute.String("source_type", sc.SourceConfigType())),
+					trace.WithAttributes(attribute.String("source_name", name)),
+				)
+				defer span.End()
+				s, err := sc.Initialize(childCtx, instrumentation.Tracer)
+				if err != nil {
+					return nil, fmt.Errorf("unable to initialize source %q: %w", name, err)
+				}
+				return s, nil
+			}()
 			if err != nil {
-				return nil, fmt.Errorf("unable to initialize source %q: %w", name, err)
+				return nil, nil, nil, nil, nil, nil, err
 			}
-			return s, nil
-		}()
-		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			sourcesMap[name] = s
 		}
-		sourcesMap[name] = s
+		sourceNames := make([]string, 0, len(sourcesMap))
+		for name := range sourcesMap {
+			sourceNames = append(sourceNames, name)
+		}
+		l.InfoContext(ctx, fmt.Sprintf("Initialized %d sources: %s", len(sourcesMap), strings.Join(sourceNames, ", ")))
 	}
-	sourceNames := make([]string, 0, len(sourcesMap))
-	for name := range sourcesMap {
-		sourceNames = append(sourceNames, name)
-	}
-	l.InfoContext(ctx, fmt.Sprintf("Initialized %d sources: %s", len(sourcesMap), strings.Join(sourceNames, ", ")))
 
 	// initialize and validate the auth services from configs
 	authServicesMap := make(map[string]auth.AuthService)
@@ -282,7 +290,16 @@ func initializeTools(ctx context.Context, cfg ServerConfig, sourcesMap map[strin
 			if err != nil {
 				return nil, fmt.Errorf("unable to initialize tool %q: %w", name, err)
 			}
-			if !cfg.SkipSourceValidation {
+			if cfg.LazySourceInit {
+				// No source is connected yet, but a tool naming a source that
+				// does not exist is still a startup error rather than a
+				// surprise on the first call.
+				if srcName := t.GetSourceName(); srcName != "" {
+					if _, ok := cfg.SourceConfigs[srcName]; !ok {
+						return nil, fmt.Errorf("unable to retrieve source %s for tool %s", srcName, name)
+					}
+				}
+			} else if !cfg.SkipSourceValidation {
 				srcName := t.GetSourceName()
 				var src sources.Source
 				var ok bool
@@ -463,6 +480,9 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	sseManager := newSseManager(ctx)
 
 	primitiveManager := primitives.NewPrimitiveManager(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap)
+	if cfg.LazySourceInit {
+		primitiveManager.SetLazySources(cfg.SourceConfigs, instrumentation.Tracer)
+	}
 
 	limit := cfg.HttpMaxRequestBytes
 	if limit <= 0 {
