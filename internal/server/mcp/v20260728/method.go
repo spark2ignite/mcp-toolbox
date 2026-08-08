@@ -303,8 +303,10 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, g group.Group, 
 		// Connects the source if lazy initialization deferred it. A failure is
 		// reported as a tool execution error rather than a protocol error, so
 		// the agent sees why the source is unreachable.
+		resolveStart := time.Now()
 		src, err = srcResolver.Resolve(ctx, srcName)
 		if err != nil {
+			mcputil.RecordToolExecutionFailure(ctx, toolName, time.Since(resolveStart).Seconds(), err)
 			text := TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("unable to retrieve source for tool %s: %s", toolName, err),
