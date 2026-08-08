@@ -15,11 +15,7 @@
 package primitives_test
 
 import (
-	"context"
-	"errors"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/googleapis/mcp-toolbox/internal/auth"
@@ -31,8 +27,6 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/sources/alloydbpg"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
-	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestUpdateServer(t *testing.T) {
@@ -98,136 +92,23 @@ func TestUpdateServer(t *testing.T) {
 	}
 }
 
-// countingSourceConfig records how many times Initialize was called and can be
-// told to fail, so tests can observe caching and retry behavior.
-type countingSourceConfig struct {
-	mu    sync.Mutex
-	calls int
-	err   error
-	delay time.Duration
-}
-
-func (c *countingSourceConfig) SourceConfigType() string { return "counting" }
-
-func (c *countingSourceConfig) Initialize(context.Context, trace.Tracer) (sources.Source, error) {
-	c.mu.Lock()
-	c.calls++
-	err, delay := c.err, c.delay
-	c.mu.Unlock()
-
-	// Holding the connection open lets concurrent callers pile up behind it,
-	// so a missing singleflight shows up as extra Initialize calls.
-	time.Sleep(delay)
-
-	if err != nil {
-		return nil, err
-	}
-	return testutils.MockSource{MockSourceConfig: testutils.MockSourceConfig{Name: "counted", Type: "counting"}}, nil
-}
-
-func (c *countingSourceConfig) callCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.calls
-}
-
-func newLazyManager(configs map[string]sources.SourceConfig) *primitives.PrimitiveManager {
+func TestSetSource(t *testing.T) {
+	// Lazy initialization constructs the manager with no sources at all, so
+	// SetSource has to cope with an absent map rather than assume startup
+	// populated one.
 	mgr := primitives.NewPrimitiveManager(nil, nil, nil, nil, nil, nil)
-	mgr.SetLazySources(configs, noop.NewTracerProvider().Tracer("test"))
-	return mgr
-}
-
-func TestResolveSourceConnectsOnceUnderConcurrency(t *testing.T) {
-	cfg := &countingSourceConfig{delay: 50 * time.Millisecond}
-	mgr := newLazyManager(map[string]sources.SourceConfig{"lazy": cfg})
-
-	// Before the first resolve the source must be invisible to listing paths,
-	// which is what lets tools/list work without connectivity.
-	if _, ok := mgr.GetSource("lazy"); ok {
-		t.Fatal("expected an unconnected source to be absent from GetSource")
+	if _, ok := mgr.GetSource("added"); ok {
+		t.Fatal("expected no sources before SetSource")
 	}
 
-	const callers = 16
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	errs := make([]error, callers)
-	for i := range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			_, errs[i] = mgr.ResolveSource(context.Background(), "lazy")
-		}()
-	}
-	close(start)
-	wg.Wait()
+	src := testutils.MockSource{MockSourceConfig: testutils.MockSourceConfig{Name: "added", Type: "mock"}}
+	mgr.SetSource("added", src)
 
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("caller %d failed to resolve: %s", i, err)
-		}
-	}
-	if got := cfg.callCount(); got != 1 {
-		t.Fatalf("expected the racing callers to share one Initialize, got %d", got)
-	}
-	if _, ok := mgr.GetSource("lazy"); !ok {
-		t.Fatal("expected the connected source to be visible to GetSource")
-	}
-}
-
-func TestResolveSourceRetriesAfterFailure(t *testing.T) {
-	cfg := &countingSourceConfig{err: errors.New("connection refused")}
-	mgr := newLazyManager(map[string]sources.SourceConfig{"lazy": cfg})
-
-	if _, err := mgr.ResolveSource(context.Background(), "lazy"); err == nil {
-		t.Fatal("expected the first resolve to fail")
-	}
-	if _, ok := mgr.GetSource("lazy"); ok {
-		t.Fatal("a failed source must not be cached")
-	}
-
-	// A failure is not cached, so a source that comes up later starts working
-	// without restarting the server.
-	cfg.mu.Lock()
-	cfg.err = nil
-	cfg.mu.Unlock()
-
-	if _, err := mgr.ResolveSource(context.Background(), "lazy"); err != nil {
-		t.Fatalf("expected the retry to succeed, got %s", err)
-	}
-	if got := cfg.callCount(); got != 2 {
-		t.Fatalf("expected 2 Initialize calls, got %d", got)
-	}
-}
-
-func TestResolveSourceUnknownName(t *testing.T) {
-	cfg := &countingSourceConfig{}
-	mgr := newLazyManager(map[string]sources.SourceConfig{"lazy": cfg})
-
-	if _, err := mgr.ResolveSource(context.Background(), "nonexistent"); err == nil {
-		t.Fatal("expected an error for an unconfigured source")
-	}
-	if got := cfg.callCount(); got != 0 {
-		t.Fatalf("expected no Initialize calls, got %d", got)
-	}
-}
-
-func TestResolveSourceEager(t *testing.T) {
-	// Without SetLazySources the manager only serves already-connected sources.
-	src := testutils.MockSource{MockSourceConfig: testutils.MockSourceConfig{Name: "eager", Type: "mock"}}
-	mgr := primitives.NewPrimitiveManager(map[string]sources.Source{"eager": src}, nil, nil, nil, nil, nil)
-
-	if mgr.LazySources() {
-		t.Fatal("expected lazy sources to be off by default")
-	}
-	got, err := mgr.ResolveSource(context.Background(), "eager")
-	if err != nil {
-		t.Fatalf("unexpected error resolving a connected source: %s", err)
+	got, ok := mgr.GetSource("added")
+	if !ok {
+		t.Fatal("expected the source to be visible after SetSource")
 	}
 	if diff := cmp.Diff(got, sources.Source(src)); diff != "" {
 		t.Errorf("unexpected source (-want +got):\n%s", diff)
-	}
-	if _, err := mgr.ResolveSource(context.Background(), "missing"); err == nil {
-		t.Fatal("expected an error for a source that was never initialized")
 	}
 }

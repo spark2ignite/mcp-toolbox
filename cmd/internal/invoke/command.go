@@ -85,10 +85,12 @@ func runInvoke(cmd *cobra.Command, args []string, opts *internal.ToolboxOptions)
 
 	var src sources.Source
 	if srcName := tool.GetSourceName(); srcName != "" {
-		// Connects the source if lazy initialization deferred it.
-		src, err = primitiveMgr.ResolveSource(ctx, srcName)
-		if err != nil {
-			errMsg := fmt.Errorf("unable to retrieve source for tool %s: %w", toolName, err)
+		// invoke does not accept --lazy-source-init, so every source is already
+		// connected by InitializeConfigs above.
+		var ok bool
+		src, ok = primitiveMgr.GetSource(srcName)
+		if !ok {
+			errMsg := fmt.Errorf("unable to retrieve source for tool %s", toolName)
 			opts.Logger.ErrorContext(ctx, errMsg.Error())
 			return errMsg
 		}

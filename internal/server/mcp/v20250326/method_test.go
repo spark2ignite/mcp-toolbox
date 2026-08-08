@@ -26,6 +26,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/log"
 	"github.com/googleapis/mcp-toolbox/internal/server/mcp/jsonrpc"
 	"github.com/googleapis/mcp-toolbox/internal/server/primitives"
+	"github.com/googleapis/mcp-toolbox/internal/server/resolver"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/util"
@@ -367,7 +368,7 @@ func TestToolsCallHandler(t *testing.T) {
 					t.Fatalf("unexpected error during marshaling")
 				}
 			}
-			got, err := toolsCallHandler(tt.context, dummyID, mustGroup(t, primitiveMgr), primitiveMgr, body, nil)
+			got, err := toolsCallHandler(tt.context, dummyID, mustGroup(t, primitiveMgr), primitiveMgr, resolver.New(primitiveMgr), body, nil)
 
 			if tt.wantErr {
 				if err == nil {
@@ -587,7 +588,8 @@ func TestToolsCallUnreachableLazySource(t *testing.T) {
 	other := testutils.NewMockTool("other_tool", "tool with no source", "", nil, false, false)
 	toolsMap, promptsMap, groups := testutils.SetUpResources(t, []testutils.MockTool{tool, other}, nil)
 	primitiveMgr := primitives.NewPrimitiveManager(nil, nil, nil, toolsMap, promptsMap, groups)
-	primitiveMgr.SetLazySources(
+	srcResolver := resolver.New(primitiveMgr)
+	srcResolver.SetLazySources(
 		map[string]sources.SourceConfig{"lazy-source": failingSourceConfig{}},
 		noop.NewTracerProvider().Tracer("test"),
 	)
@@ -603,7 +605,7 @@ func TestToolsCallUnreachableLazySource(t *testing.T) {
 		t.Fatalf("unexpected error during marshaling: %s", err)
 	}
 
-	got, err := toolsCallHandler(ctx, dummyID, mustGroup(t, primitiveMgr), primitiveMgr, body, nil)
+	got, err := toolsCallHandler(ctx, dummyID, mustGroup(t, primitiveMgr), primitiveMgr, srcResolver, body, nil)
 	// A connection failure must reach the agent as a tool result, not as a
 	// JSON-RPC protocol error that most harnesses discard.
 	if err != nil {

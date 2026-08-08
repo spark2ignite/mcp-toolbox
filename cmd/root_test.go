@@ -34,6 +34,8 @@ import (
 	"github.com/googleapis/mcp-toolbox/cmd/internal"
 	"github.com/googleapis/mcp-toolbox/internal/log"
 	"github.com/googleapis/mcp-toolbox/internal/server"
+	"github.com/googleapis/mcp-toolbox/internal/server/primitives"
+	"github.com/googleapis/mcp-toolbox/internal/server/resolver"
 	"github.com/googleapis/mcp-toolbox/internal/telemetry"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/util"
@@ -628,7 +630,11 @@ func TestSingleEdit(t *testing.T) {
 	}
 	ctx = util.WithInstrumentation(ctx, instrumentation)
 
-	mockServer := &server.Server{}
+	// watchChanges reads SourceResolver on every debounced reload, so a
+	// zero-value Server panics if the debounce fires before teardown.
+	mockServer := &server.Server{
+		SourceResolver: resolver.New(primitives.NewPrimitiveManager(nil, nil, nil, nil, nil, nil)),
+	}
 
 	cleanFileToWatch := filepath.Clean(fileToWatch)
 	watchDir := filepath.Dir(cleanFileToWatch)

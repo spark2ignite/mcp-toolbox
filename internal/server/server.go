@@ -41,6 +41,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/prompts"
 	"github.com/googleapis/mcp-toolbox/internal/server/mcp/jsonrpc"
 	"github.com/googleapis/mcp-toolbox/internal/server/primitives"
+	"github.com/googleapis/mcp-toolbox/internal/server/resolver"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/telemetry"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
@@ -61,6 +62,7 @@ type Server struct {
 	instrumentation     *telemetry.Instrumentation
 	sseManager          *sseManager
 	PrimitiveMgr        *primitives.PrimitiveManager
+	SourceResolver      *resolver.SourceResolver
 	mcpPrmFile          string
 	httpMaxRequestBytes int64
 	enableDraftSpecs    bool
@@ -101,10 +103,10 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 	// initialize and validate the sources from configs
 	sourcesMap := make(map[string]sources.Source)
 	if cfg.LazySourceInit {
-		// Sources connect on first use via PrimitiveManager.ResolveSource, so
-		// there is no live source to validate a tool against yet. Tool/source
-		// type compatibility is still checked at invocation time.
-		cfg.SkipSourceValidation = true
+		// Sources connect on first use via SourceResolver.Resolve, so there is
+		// no live source to validate a tool against yet. initializeTools checks
+		// that the named source exists; tool/source type compatibility is
+		// deferred to invocation time.
 		l.InfoContext(ctx, fmt.Sprintf("Deferred initialization of %d sources: each connects on first use", len(cfg.SourceConfigs)))
 	} else {
 		for name, sc := range cfg.SourceConfigs {
@@ -480,8 +482,9 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	sseManager := newSseManager(ctx)
 
 	primitiveManager := primitives.NewPrimitiveManager(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap)
+	srcResolver := resolver.New(primitiveManager)
 	if cfg.LazySourceInit {
-		primitiveManager.SetLazySources(cfg.SourceConfigs, instrumentation.Tracer)
+		srcResolver.SetLazySources(cfg.SourceConfigs, instrumentation.Tracer)
 	}
 
 	limit := cfg.HttpMaxRequestBytes
@@ -498,6 +501,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		instrumentation:     instrumentation,
 		sseManager:          sseManager,
 		PrimitiveMgr:        primitiveManager,
+		SourceResolver:      srcResolver,
 		toolboxUrl:          cfg.ToolboxUrl,
 		mcpPrmFile:          cfg.McpPrmFile,
 		httpMaxRequestBytes: limit,

@@ -139,7 +139,7 @@ func handleDynamicReload(ctx context.Context, toolsFile internal.Config, s *serv
 		panic(err)
 	}
 
-	lazySources := s.PrimitiveMgr.LazySources()
+	lazySources := s.SourceResolver.Lazy()
 
 	sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap, err := validateReloadEdits(ctx, toolsFile, lazySources)
 	if err != nil {
@@ -148,14 +148,20 @@ func handleDynamicReload(ctx context.Context, toolsFile internal.Config, s *serv
 		return err
 	}
 
-	s.PrimitiveMgr.SetPrimitives(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap)
+	// Install the reloaded source configs before swapping the primitives. The
+	// two updates take different locks, so a tool call can land between them;
+	// in this order the worst case is a connect whose result is discarded by
+	// the swap. Reversed, a caller would connect from the pre-reload config and
+	// cache it into the new store, pinning a stale source for the process
+	// lifetime.
 	if lazySources {
 		instrumentation, err := util.InstrumentationFromContext(ctx)
 		if err != nil {
 			panic(err)
 		}
-		s.PrimitiveMgr.SetLazySources(toolsFile.Sources, instrumentation.Tracer)
+		s.SourceResolver.SetLazySources(toolsFile.Sources, instrumentation.Tracer)
 	}
+	s.PrimitiveMgr.SetPrimitives(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, promptsMap, groupsMap)
 
 	return nil
 }
@@ -373,7 +379,7 @@ func watchChanges(ctx context.Context, watchDirs map[string]bool, watchedFiles m
 		case <-debounce.C:
 			debounce.Stop()
 			var allFiles []string
-			parser := internal.ConfigParser{}
+			parser := internal.ConfigParser{AllowMissingEnvVars: s.SourceResolver.Lazy()}
 			if watchingFolder {
 				logger.DebugContext(ctx, "Reloading config folder.")
 				allFiles, err = internal.GetPathsFromConfigFolder(ctx, folderToWatch)
@@ -460,9 +466,19 @@ func run(cmd *cobra.Command, opts *internal.ToolboxOptions) error {
 		_ = shutdown(ctx)
 	}()
 
-	isCustomConfigured, err := opts.LoadConfig(ctx, &internal.ConfigParser{})
+	// Lazy initialization never connects during parsing, so source env vars only
+	// need to satisfy validation. Letting unset ones resolve to a placeholder is
+	// what makes --lazy-source-init sufficient on its own to inspect a catalog.
+	parser := internal.ConfigParser{AllowMissingEnvVars: opts.Cfg.LazySourceInit}
+	isCustomConfigured, err := opts.LoadConfig(ctx, &parser)
 	if err != nil {
 		return err
+	}
+	if len(parser.MissingEnvVars) > 0 {
+		slices.Sort(parser.MissingEnvVars)
+		opts.Logger.WarnContext(ctx, fmt.Sprintf(
+			"Unset environment variables replaced with placeholders because --lazy-source-init is set; any source using them will fail to connect: %s",
+			strings.Join(parser.MissingEnvVars, ", ")))
 	}
 
 	// Validate ToolboxUrl if MCP Auth is enabled

@@ -29,6 +29,7 @@ import (
 	v20251125 "github.com/googleapis/mcp-toolbox/internal/server/mcp/v20251125"
 	v20260728 "github.com/googleapis/mcp-toolbox/internal/server/mcp/v20260728"
 	"github.com/googleapis/mcp-toolbox/internal/server/primitives"
+	"github.com/googleapis/mcp-toolbox/internal/server/resolver"
 	"github.com/googleapis/mcp-toolbox/internal/util"
 )
 
@@ -46,7 +47,7 @@ func NotificationHandler(ctx context.Context, body []byte) error {
 
 // ProcessMethod returns a response for the request.
 // This is the Operation phase of the lifecycle for MCP client-server connections.
-func ProcessMethod(ctx context.Context, mcpVersion string, id jsonrpc.RequestId, method string, g group.Group, primitiveMgr *primitives.PrimitiveManager, body []byte, header http.Header) (any, error) {
+func ProcessMethod(ctx context.Context, mcpVersion string, id jsonrpc.RequestId, method string, g group.Group, primitiveMgr *primitives.PrimitiveManager, srcResolver *resolver.SourceResolver, body []byte, header http.Header) (any, error) {
 	enableDraft, ok := util.EnableDraftSpecsFromContext(ctx)
 	if !ok {
 		err := fmt.Errorf("unable to retrieve enableDraftSpecs from context")
@@ -54,15 +55,15 @@ func ProcessMethod(ctx context.Context, mcpVersion string, id jsonrpc.RequestId,
 	}
 	switch mcpVersion {
 	case mcputil.VERSION_20260728:
-		return v20260728.ProcessMethod(ctx, id, method, g, primitiveMgr, body, header)
+		return v20260728.ProcessMethod(ctx, id, method, g, primitiveMgr, srcResolver, body, header)
 	case mcputil.VERSION_20251125:
-		return v20251125.ProcessMethod(ctx, id, method, g, primitiveMgr, body, header)
+		return v20251125.ProcessMethod(ctx, id, method, g, primitiveMgr, srcResolver, body, header)
 	case mcputil.VERSION_20250618:
-		return v20250618.ProcessMethod(ctx, id, method, g, primitiveMgr, body, header)
+		return v20250618.ProcessMethod(ctx, id, method, g, primitiveMgr, srcResolver, body, header)
 	case mcputil.VERSION_20250326:
-		return v20250326.ProcessMethod(ctx, id, method, g, primitiveMgr, body, header)
+		return v20250326.ProcessMethod(ctx, id, method, g, primitiveMgr, srcResolver, body, header)
 	case "", mcputil.VERSION_20241105:
-		return v20241105.ProcessMethod(ctx, id, method, g, primitiveMgr, body, header)
+		return v20241105.ProcessMethod(ctx, id, method, g, primitiveMgr, srcResolver, body, header)
 	default:
 		return jsonrpc.NewUnsupportedProtocolVersionError(id, mcpVersion, enableDraft)
 	}

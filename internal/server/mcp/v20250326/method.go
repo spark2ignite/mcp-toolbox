@@ -29,6 +29,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/server/mcp/jsonrpc"
 	mcputil "github.com/googleapis/mcp-toolbox/internal/server/mcp/util"
 	"github.com/googleapis/mcp-toolbox/internal/server/primitives"
+	"github.com/googleapis/mcp-toolbox/internal/server/resolver"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
 	"github.com/googleapis/mcp-toolbox/internal/util"
@@ -39,7 +40,7 @@ import (
 )
 
 // ProcessMethod returns a response for the request.
-func ProcessMethod(ctx context.Context, id jsonrpc.RequestId, method string, g group.Group, primitiveMgr *primitives.PrimitiveManager, body []byte, header http.Header) (any, error) {
+func ProcessMethod(ctx context.Context, id jsonrpc.RequestId, method string, g group.Group, primitiveMgr *primitives.PrimitiveManager, srcResolver *resolver.SourceResolver, body []byte, header http.Header) (any, error) {
 	switch method {
 	case INITIALIZE:
 		return initializeHandler(ctx, id, body)
@@ -48,7 +49,7 @@ func ProcessMethod(ctx context.Context, id jsonrpc.RequestId, method string, g g
 	case TOOLS_LIST:
 		return toolsListHandler(ctx, id, primitiveMgr, g, body)
 	case TOOLS_CALL:
-		return toolsCallHandler(ctx, id, g, primitiveMgr, body, header)
+		return toolsCallHandler(ctx, id, g, primitiveMgr, srcResolver, body, header)
 	case PROMPTS_LIST:
 		return promptsListHandler(ctx, id, primitiveMgr, g, body)
 	case PROMPTS_GET:
@@ -133,7 +134,7 @@ func toolsListHandler(ctx context.Context, id jsonrpc.RequestId, primitiveMgr *p
 }
 
 // toolsCallHandler generate a response for tools call.
-func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, g group.Group, primitiveMgr *primitives.PrimitiveManager, body []byte, header http.Header) (any, error) {
+func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, g group.Group, primitiveMgr *primitives.PrimitiveManager, srcResolver *resolver.SourceResolver, body []byte, header http.Header) (any, error) {
 	if header != nil {
 		if clientIP := util.ExtractClientIP(header); clientIP != "" {
 			ctx = util.WithClientIP(ctx, clientIP)
@@ -183,7 +184,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, g group.Group, 
 		// Connects the source if lazy initialization deferred it. A failure is
 		// reported as a tool execution error rather than a protocol error, so
 		// the agent sees why the source is unreachable.
-		src, err = primitiveMgr.ResolveSource(ctx, srcName)
+		src, err = srcResolver.Resolve(ctx, srcName)
 		if err != nil {
 			text := TextContent{
 				Type: "text",

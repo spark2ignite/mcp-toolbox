@@ -225,8 +225,12 @@ source surface as a tool error the agent can read than as a server that never
 comes up.
 
 ```bash
-./toolbox --tools-file tools.yaml --lazy-source-init
+./toolbox --prebuilt alloydb-postgres --lazy-source-init
 ```
+
+The flag is sufficient on its own — the command above starts and serves the full
+AlloyDB tool catalog with no database, no credentials, and none of the
+`ALLOYDB_POSTGRES_*` environment variables set.
 
 With the flag set:
 
@@ -246,8 +250,12 @@ schema is derived from a live source — such as the BigQuery tools that read
 allowed datasets and write mode — advertise their static schema until that
 source connects, and their resolved schema afterward.
 
-Source environment variables such as `${DB_PASSWORD}` are still required at
-startup; this flag defers connections, not configuration.
+Unset `${VAR}` placeholders no longer fail startup. Because nothing connects
+until a tool call, an unset required variable resolves to its own name as a
+placeholder so the config still parses and validates. Toolbox logs a warning
+naming every variable it substituted, and any source relying on one fails when
+that source is first reached. Without `--lazy-source-init` a missing variable is
+still a startup error.
 
 ### Toolbox UI
 

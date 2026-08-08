@@ -142,6 +142,10 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.instrumentation.Tracer.Start(r.Context(), "toolbox/server/tool/invoke")
 	r = r.WithContext(ctx)
 	ctx = util.WithLogger(r.Context(), s.logger)
+	// Lazy initialization connects the source from this request's context, and
+	// most source drivers refuse to build a client without a user agent. The
+	// MCP transports set it per request; this path has to as well.
+	ctx = util.WithUserAgent(ctx, s.version)
 
 	toolName := chi.URLParam(r, "toolName")
 	s.logger.DebugContext(ctx, fmt.Sprintf("tool name: %s", toolName))
@@ -165,7 +169,7 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	var src sources.Source
 	if srcName := tool.GetSourceName(); srcName != "" {
 		// Connects the source if lazy initialization deferred it.
-		src, err = s.PrimitiveMgr.ResolveSource(ctx, srcName)
+		src, err = s.SourceResolver.Resolve(ctx, srcName)
 		if err != nil {
 			err = fmt.Errorf("unable to retrieve source for tool %s: %w", toolName, err)
 			s.logger.DebugContext(ctx, err.Error())
