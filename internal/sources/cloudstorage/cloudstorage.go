@@ -136,6 +136,10 @@ func isUnderRoot(target, root string) bool {
 	return strings.HasPrefix(target, root)
 }
 
+func (s *Source) IsReadOnly() bool {
+	return false
+}
+
 func (s *Source) SourceType() string {
 	return SourceType
 }

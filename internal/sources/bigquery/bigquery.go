@@ -321,6 +321,10 @@ type Session struct {
 	LastUsed     time.Time
 }
 
+func (s *Source) IsReadOnly() bool {
+	return false
+}
+
 func (s *Source) SourceType() string {
 	// Returns BigQuery Google SQL source type
 	return SourceType
