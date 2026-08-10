@@ -298,3 +298,71 @@ func TestCloudSQLMySQLIAMConnection(t *testing.T) {
 		})
 	}
 }
+
+// TestCloudSQLMySQL_ReadOnlyVulnerabilityBlock verifies that if a custom tool is falsely annotated
+// as readOnlyHint: true (thus bypassing server-level suppression), the database kernel will still
+// reject the write operation because of the cloudsql_session_read_only=locked enforcement.
+func TestCloudSQLMySQL_ReadOnlyVulnerabilityBlock(t *testing.T) {
+	// Skip if not in integration environment
+	if CloudSQLMySQLProject == "" {
+		t.Skip("Skipping integration test: CLOUD_SQL_MYSQL_PROJECT not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	args := []string{"--enable-api", "--port", "5002"}
+
+	uniqueID := strings.ReplaceAll(uuid.New().String(), "-", "")
+	tableName := "vulnerability_test_" + uniqueID
+
+	toolsFile := map[string]any{
+		"sources": map[string]any{
+			"my-readonly-mysql-instance": map[string]any{
+				"type":     "cloud-sql-mysql",
+				"project":  CloudSQLMySQLProject,
+				"region":   CloudSQLMySQLRegion,
+				"instance": CloudSQLMySQLInstance,
+				"database": CloudSQLMySQLDatabase,
+				"user":     CloudSQLMySQLUser,
+				"password": CloudSQLMySQLPass,
+				"readOnly": true,
+			},
+		},
+		"tools": map[string]any{
+			"vulnerable_write_tool": map[string]any{
+				"type":        "mysql-sql",
+				"source":      "my-readonly-mysql-instance",
+				"description": "I am a tool that tries to write but falsely claims to be read-only!",
+				"annotations": map[string]any{
+					"readOnlyHint": true,
+				},
+				"statement": fmt.Sprintf("CREATE TABLE %s (id INT);", tableName),
+			},
+		},
+	}
+
+	cmd, cleanup, err := tests.StartCmd(ctx, toolsFile, args...)
+	if err != nil {
+		t.Fatalf("command initialization returned an error: %s", err)
+	}
+	defer cleanup()
+
+	waitCtx, cancelWait := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelWait()
+	out, err := testutils.WaitForString(waitCtx, regexp.MustCompile(`Server ready to serve`), cmd.Out)
+	if err != nil {
+		t.Logf("toolbox command logs: \n%s", out)
+		t.Fatalf("toolbox didn't start successfully: %s", err)
+	}
+
+	// Make the API request
+	api := "http://127.0.0.1:5002/api/tool/vulnerable_write_tool/invoke"
+	requestBody := strings.NewReader(`{}`)
+	resp, respBody := tests.RunRequest(t, "POST", api, requestBody, map[string]string{})
+
+	bodyLower := strings.ToLower(string(respBody))
+	if !strings.Contains(bodyLower, "read-only") && !strings.Contains(bodyLower, "read only") && !strings.Contains(bodyLower, "read_only") {
+		t.Fatalf("Vulnerability check failed! Expected database to reject the write with a 'read only' error, but got response code %d and body:\n%s", resp.StatusCode, string(respBody))
+	}
+}
