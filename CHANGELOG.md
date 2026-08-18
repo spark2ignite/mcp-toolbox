@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/googleapis/mcp-toolbox/compare/v1.9.0...v1.10.0) (2026-08-18)
+
+
+### Features
+
+* **skill:** Add fix-failing-tests skill for mcp-toolbox ([#3821](https://github.com/googleapis/mcp-toolbox/issues/3821)) ([168e69c](https://github.com/googleapis/mcp-toolbox/commit/168e69c048d65aa15b926f9dd7680245949cc57a))
+
 ## [1.9.0](https://github.com/googleapis/mcp-toolbox/compare/v1.8.0...v1.9.0) (2026-08-14)
 
 
